@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "config_version": 1,
+    "name": "Igi's Pack"
+  },
+  "mods": {
+    "Anomaly-Mod-Configuration-Menu": {
+      "moddb": {
+        "url": "anomaly-mod-configuration-menu",
+        "updated": "Aug 8th, 2022"
+      }
+    },
+    "anomaly-speed": {
+      "github": {
+        "url": "ahuyn/anomaly-speed",
+        "tag": "latest",
+        "filename": "anomaly-speed.2022.10.30.zip"
+      }
+    }
+  }
+}
