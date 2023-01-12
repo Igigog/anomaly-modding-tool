@@ -10,15 +10,15 @@ use app::TemplateApp;
 
 use crate::actions::{download_7zip, download_file, unpack_temporary};
 
-#[tokio::main]
-async fn main() {
-    /* eframe::run_native(
+// #[tokio::main]
+fn main() {
+    eframe::run_native(
         "Anomaly modding tool",
         eframe::NativeOptions::default(),
         Box::new(|cc| Box::new(TemplateApp::new(cc))),
-    ); */
+    );
 
-    let mut file = std::fs::File::open("config.json").unwrap();
+/*     let mut file = std::fs::File::open("config.json").unwrap();
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
     let text = String::from_utf8(data).unwrap();
@@ -62,5 +62,5 @@ async fn main() {
         .map(|e| e.path().parent().unwrap().to_path_buf())
         .collect();
     dbg!(&dirs);
-    dbg!(dirs.get(0).unwrap().as_path().parent().unwrap() == up.path());
+    dbg!(dirs.get(0).unwrap().as_path().parent().unwrap() == up.path()); */
 }

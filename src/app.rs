@@ -211,7 +211,7 @@ impl TemplateApp {
             let progress = Arc::new(Mutex::new(InstallMo2Progress::default()));
             let progress_cl = progress.clone();
             let handle = std::thread::spawn(move || {
-                InstallMo2::run(app_ctx, |p| {
+                InstallMo2::run((), app_ctx, |p| {
                     *progress_cl.lock() = p.clone();
                     gui_ctx.request_repaint();
                 })
@@ -233,7 +233,7 @@ impl TemplateApp {
             let app_ctx = app_ctx.clone();
             let gui_ctx = ctx.clone();
             let handle = std::thread::spawn(move || {
-                InstallModdedExes::run(app_ctx, |p| {
+                InstallModdedExes::run((), app_ctx, |p| {
                     gui_ctx.request_repaint();
                 })
             });

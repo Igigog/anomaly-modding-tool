@@ -7,14 +7,15 @@ use regex::Regex;
 use reqwest::IntoUrl;
 use std::{
     ffi::OsString,
+    fmt::format,
     fs,
     os::windows::process::CommandExt,
-    path::{Path, PathBuf}, fmt::format,
+    path::{Path, PathBuf},
 };
 use tempfile::{NamedTempFile, TempDir, TempPath};
 use tokio::runtime::Runtime;
 
-use crate::app::AppContext;
+use crate::{app::AppContext, backup::FileTransaction};
 
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
@@ -83,7 +84,9 @@ impl<P: AsRef<Path>> Unpacker7Zip<P> {
 pub trait AppAction {
     type Output;
     type Progress;
+    type Config;
     fn run(
+        config: Self::Config,
         ctx: impl AsRef<AppContext>,
         progress: impl FnMut(&Self::Progress),
     ) -> Result<Self::Output>;
@@ -125,27 +128,28 @@ impl InstallMo2 {
         progress_callback: impl FnMut(&DownloadProgress),
     ) -> Result<tempfile::NamedTempFile> {
         let url = Self::scrape_mo2_url().await?;
-
-        let result = download_file(url, tempfile::NamedTempFile::new()?, progress_callback).await?;
-        Ok(result)
+        download_file(url, tempfile::NamedTempFile::new()?, progress_callback).await
     }
 
-    fn configure_mo2() -> Result<()> {
-        let mut modorg_config = std::fs::File::create("mo2\\ModOrganizer.ini")?;
-        let wd = std::env::current_dir().unwrap();
-        let pwd = wd.to_str().unwrap();
+    fn configure_mo2(mo_path: &Path, anomaly_path: &Path) -> Result<()> {
+        let anomaly_path_str = anomaly_path.to_str().unwrap();
         let content: Vec<u8> = MODORG_INI
             .lines()
             .map(|l| {
-                l.replace("D:/Games/Anomaly", &pwd.replace('\\', "/"))
-                    .replace(r"D:\\Games\\Anomaly", &pwd.replace('\\', r"\\"))
+                l.replace("D:/Games/Anomaly", &anomaly_path_str.replace('\\', "/"))
+                    .replace(
+                        r"D:\\Games\\Anomaly",
+                        &anomaly_path_str.replace('\\', r"\\"),
+                    )
                     + "\n"
             })
             .flat_map(|s| s.bytes().collect::<Vec<_>>())
             .collect();
+
+        let mut modorg_config = std::fs::File::create(mo_path.join("ModOrganizer.ini"))?;
         std::io::copy(&mut content.as_slice(), &mut modorg_config)?;
 
-        let mut nxm = std::fs::File::create("mo2\\nxmhandler.ini")?;
+        let mut nxm = std::fs::File::create(mo_path.join("nxmhandler.ini"))?;
         std::io::copy(&mut NXMHANDLER.as_bytes(), &mut nxm)?;
         Ok(())
     }
@@ -160,10 +164,12 @@ pub struct InstallMo2Progress {
 }
 
 impl AppAction for InstallMo2 {
-    type Output = PathBuf;
+    type Output = ();
     type Progress = InstallMo2Progress;
+    type Config = ();
 
     fn run(
+        _config: Self::Config,
         ctx: impl AsRef<AppContext>,
         mut progress_callback: impl FnMut(&Self::Progress),
     ) -> Result<Self::Output> {
@@ -183,23 +189,24 @@ impl AppAction for InstallMo2 {
         progress_callback(&progress);
 
         let modorg_tmp = unpack_temporary(unpacker_7zip, mod_org, |_| {})?;
-        let modorg_dir = ctx.anomaly_dir.join("mo2");
-
-        std::fs::create_dir(&modorg_dir)?;
-        let mut opt = CopyOptions::new();
-        opt.content_only = true;
-        fs_extra::dir::copy(&modorg_tmp, &modorg_dir, &opt)?;
 
         progress.unpacking_done = Some(true);
         progress.configuring_done = Some(false);
         progress_callback(&progress);
 
-        Self::configure_mo2()?;
+        Self::configure_mo2(modorg_tmp.path(), &ctx.anomaly_dir)?;
 
         progress.configuring_done = Some(true);
         progress.finished = true;
         progress_callback(&progress);
-        Ok(modorg_dir)
+
+        let tr = FileTransaction::new(modorg_tmp)?;
+
+        let mo_dir = ctx.anomaly_dir.join("mo2");
+        let backup_dir = ctx.anomaly_dir.join("BACKUP");
+        let safe_tr = tr.backup(&mo_dir, &backup_dir)?;
+
+        safe_tr.run()
     }
 }
 
@@ -210,37 +217,28 @@ impl InstallModdedExes {
         let resp = CLIENT.get(URL_MODDED_EXES).send().await?.text().await?;
         let url = format!(
             "https://github.com{}",
-            LINKS_REGEX.captures_iter(&resp)
+            LINKS_REGEX
+                .captures_iter(&resp)
                 .map(|c| c.get(1).unwrap())
                 .find(|s| s.as_str().ends_with(".zip") && !s.as_str().ends_with("main.zip"))
-                .map(|s| s.as_str().to_owned().replace("blob", "raw"))
+                .map(|s| s.as_str().replace("blob", "raw"))
                 .ok_or_else(|| anyhow!("Couldn't find the link for modded exes"))?
         );
-        println!("{:#?}", url);
 
-        let result = download_file(url, tempfile::NamedTempFile::new()?, |_p| {
+        download_file(url, tempfile::NamedTempFile::new()?, |_p| {
             {};
         })
-        .await?;
-        Ok(result)
+        .await
     }
 
     fn get_relative_paths_of_files(dir_path: &Path) -> Vec<PathBuf> {
-        let mut v = Vec::new();
-        let path_len = dir_path.components().count();
         walkdir::WalkDir::new(dir_path)
             .into_iter()
             .filter_map(|e| e.ok())
             .map(|e| e.into_path())
             .filter(|p| p.is_file())
-            .for_each(|p| {
-                let mut components = p.components();
-                for _ in 0..path_len {
-                    components.next();
-                }
-                v.push(components.as_path().to_path_buf());
-            });
-        v
+            .map(|p| p.strip_prefix(dir_path).unwrap().to_owned())
+            .collect()
     }
 
     fn backup_files(backup_dir: &Path, files: impl Iterator<Item = PathBuf>) {
@@ -258,7 +256,9 @@ impl InstallModdedExes {
 impl AppAction for InstallModdedExes {
     type Output = ();
     type Progress = ();
+    type Config = ();
     fn run(
+        _config: Self::Config,
         _ctx: impl AsRef<AppContext>,
         _progress: impl FnMut(&Self::Progress),
     ) -> Result<Self::Output> {
@@ -399,7 +399,12 @@ pub async fn scrape_moddb_url(addon: &str) -> Result<impl IntoUrl> {
         .map(|m| m.as_str().to_owned())
         .ok_or_else(|| anyhow!("Couldn't find moddb download button"))?;
 
-    let resp = CLIENT.get(format!("https://www.moddb.com{}", link)).send().await?.text().await?;
+    let resp = CLIENT
+        .get(format!("https://www.moddb.com{}", link))
+        .send()
+        .await?
+        .text()
+        .await?;
     let link = LINKS_REGEX
         .captures_iter(&resp)
         .map(|s| s.get(1).unwrap())

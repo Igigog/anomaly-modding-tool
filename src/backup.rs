@@ -4,18 +4,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub struct FileTransaction<'a> {
-    files: Box<dyn AsRef<Path> + 'a>,
+pub struct FileTransaction {
+    files: Box<dyn AsRef<Path>>,
 }
 
 pub struct SafeTransaction<'a, 'b> {
-    transaction: &'a FileTransaction<'a>,
+    transaction: &'a FileTransaction,
     backup_dir: &'b Path,
     root_dir: &'b Path,
 }
 
-impl<'a, 'b> FileTransaction<'a> {
-    pub fn new(path: impl AsRef<Path> + 'a) -> Result<FileTransaction<'a>> {
+impl<'a, 'b> FileTransaction {
+    pub fn new(path: impl AsRef<Path> + 'static) -> Result<Self> {
         let p = path.as_ref();
         if !p.is_dir() {
             bail!("Path is not a directory")
@@ -63,7 +63,7 @@ impl<'a, 'b> FileTransaction<'a> {
         Ok(())
     }
 
-    fn backup(
+    pub fn backup(
         &'a self,
         root_dir: &'b Path,
         backup_dir: &'b Path,
@@ -162,7 +162,7 @@ mod tests {
         std::fs::File::create(tmpdir.path().join("dir2/config.rs")).unwrap();
         std::fs::File::create(tmpdir.path().join("dir2/dir2/config.rs")).unwrap();
 
-        let tr = FileTransaction::new(tmpdir.path()).unwrap();
+        let tr = FileTransaction::new(tmpdir).unwrap();
 
         let paths = tr.relative_file_paths();
         let expected = [
@@ -190,7 +190,7 @@ mod tests {
         std::fs::File::create(tmpdir.path().join("resources/nxmhandler.ini")).unwrap();
 
         let cwd = std::env::current_dir().unwrap();
-        let tr = FileTransaction::new(tmpdir.path()).unwrap();
+        let tr = FileTransaction::new(tmpdir).unwrap();
 
         let backup = tr.backup(&cwd, backup_path).unwrap();
 
