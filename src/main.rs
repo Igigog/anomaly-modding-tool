@@ -2,10 +2,9 @@
 mod actions;
 mod app;
 mod config;
-mod response_structs;
 mod backup;
 
-use std::{ffi::OsString, io::Read};
+use std::{io::Read};
 
 use app::TemplateApp;
 
