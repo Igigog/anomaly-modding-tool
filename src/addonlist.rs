@@ -1,8 +1,6 @@
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet},
-    fs::File,
-    io::stdin,
     path::{Path, PathBuf},
 };
 
@@ -16,7 +14,7 @@ use tempfile::{tempdir, TempDir};
 
 use crate::{
     actions::{download_and_unpack, Unpack7Zip},
-    backup::{BasicTransaction, ComplexTransaction},
+    backup::{BasicTransaction, ComplexTransaction, InDir, SafeTransaction, Transaction},
     config::ModpackConfig,
 };
 
@@ -30,22 +28,17 @@ pub struct Modpack {
 }
 
 impl Modpack {
-    pub async fn install(&self, mo_dir: &Path, unpacker: &impl Unpack7Zip) -> Result<()> {
-        let modpack = tempdir()?;
+    pub async fn install(&self, mo_dir: &Path, unpacker: impl Unpack7Zip) -> Result<()> {
         let mut cache = DownloadCache::new();
         let mut tr = ComplexTransaction::new();
         for addon in self.addons.missing_addons(mo_dir) {
             let entry = self.addons.get(addon).unwrap();
             let dl_dir = cache.get_or_download(&entry.download, unpacker).await?;
-            let tr = Addons::install(entry, unpacker, &dl_dir).await?;
-            let addon_dir = modpack.path().join(addon);
-            std::fs::create_dir(&addon_dir).unwrap_or(());
-            tr.run(&addon_dir)?;
+            let addon_files = Addons::install(entry, &dl_dir).await?;
+            tr.add(InDir::new(addon_files, addon));
         }
 
-        let tr = BasicTransaction::new(modpack)?;
-        let backup = tempdir()?;
-        tr.backup(&mo_dir.join("mods"), backup.path())?.run()?;
+        SafeTransaction::new(&tr, tempdir()?)?.run(&mo_dir.join("mods"))?;
         Ok(())
     }
 }
@@ -68,7 +61,7 @@ impl<'a> DownloadCache<'a> {
     async fn get_or_download(
         &mut self,
         key: &'a AddonKey,
-        unpacker: &impl Unpack7Zip,
+        unpacker: impl Unpack7Zip,
     ) -> Result<PathBuf> {
         dbg!(serde_json::to_string(key).unwrap());
         let entry = self.0.entry(key);
@@ -192,11 +185,7 @@ impl Addons {
             .collect()
     }
 
-    async fn install<'a>(
-        entry: &'a FolderEntry,
-        unpacker: &impl Unpack7Zip,
-        dl_dir: &Path,
-    ) -> Result<BasicTransaction> {
+    async fn install<'a>(entry: &'a FolderEntry, dl_dir: &Path) -> Result<BasicTransaction> {
         let folders = walkdir::WalkDir::new(&dl_dir)
             .into_iter()
             .filter_map(|d| d.ok())

@@ -1,8 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
 
-use crate::addonlist::FolderEntry;
+use crate::{addonlist::FolderEntry, app::AppContext};
 
 
 #[derive(Debug, Serialize, Deserialize)]

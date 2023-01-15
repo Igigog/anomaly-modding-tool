@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let pack: Modpack = config.into();
     let unpacker = download_7zip().await?;
     let mo_dir = Path::new("mo2");
-    pack.install(mo_dir, &&unpacker).await?;
+    pack.install(mo_dir, &unpacker).await?;
 
     Ok(())
 }

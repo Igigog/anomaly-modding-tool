@@ -8,7 +8,10 @@ use std::{ffi::OsString, fs, os::windows::process::CommandExt, path::Path};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 use tokio::runtime::Runtime;
 
-use crate::{app::AppContext, backup::BasicTransaction};
+use crate::{
+    app::AppContext,
+    backup::{BasicTransaction, SafeTransaction, Transaction},
+};
 
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
@@ -32,7 +35,7 @@ pub struct Unpacker7Zip<P: AsRef<Path>> {
     path: P,
 }
 
-pub trait Unpack7Zip {
+pub trait Unpack7Zip: Copy {
     fn unpack(&self, file_path: &Path, out_dir: &Path) -> Result<()>;
 }
 
@@ -185,7 +188,7 @@ impl AppAction for InstallMo2 {
         progress.unpacking_done = Some(false);
         progress_callback(&progress);
 
-        let modorg_tmp = unpack_temporary(&unpacker_7zip, mod_org, |_| {})?;
+        let modorg_tmp = unpack_temporary(unpacker_7zip, mod_org, |_| {})?;
 
         progress.unpacking_done = Some(true);
         progress.configuring_done = Some(false);
@@ -199,9 +202,7 @@ impl AppAction for InstallMo2 {
 
         let mo_dir = ctx.anomaly_dir.join("mo2");
         let backup_dir = ctx.anomaly_dir.join("BACKUP");
-        let safe_tr = tr.backup(&mo_dir, &backup_dir)?;
-
-        let done = safe_tr.run();
+        let done = SafeTransaction::new(&tr, &backup_dir)?.run(&mo_dir);
 
         progress.finished = true;
         progress_callback(&progress);
@@ -246,17 +247,16 @@ impl AppAction for InstallModdedExes {
         unpack_zip(file.as_file(), tmp_dir.path(), |_| {})?;
         let tr = BasicTransaction::new(tmp_dir)?;
         let backup_dir = ctx.as_ref().anomaly_dir.join("BACKUP_Vanilla_exes");
-        let safe = tr.backup(&ctx.as_ref().anomaly_dir, &backup_dir)?;
-        safe.run()?;
+        SafeTransaction::new(&tr, &backup_dir)?.run(&ctx.as_ref().anomaly_dir)?;
         Ok(())
     }
 }
 
-pub async fn download_and_unpack(url: impl IntoUrl, unpacker: &impl Unpack7Zip) -> Result<TempDir> {
+pub async fn download_and_unpack(url: impl IntoUrl, unpacker: impl Unpack7Zip) -> Result<TempDir> {
     let file = download_file(url, tempfile::NamedTempFile::new()?, |p| {
         println!(
-            "Downloading {:#?}: {}/{:#?}",
-            p.file_name, p.downloaded, p.size
+            "Downloading {}: {}/{}",
+            p.file_name.as_ref().map(|s| s.to_owned()).unwrap_or_default(), p.downloaded, p.size.unwrap_or(0)
         );
     })
     .await?;
@@ -311,7 +311,7 @@ pub struct UnpackZipProgress {
 }
 
 pub fn unpack_temporary(
-    unpacker_7zip: &impl Unpack7Zip,
+    unpacker_7zip: impl Unpack7Zip,
     file: NamedTempFile,
     progress_callback: impl FnMut(&UnpackZipProgress),
 ) -> Result<TempDir> {
