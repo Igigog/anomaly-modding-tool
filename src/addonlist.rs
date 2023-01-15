@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet},
+    io::Cursor,
     path::{Path, PathBuf},
 };
 
@@ -10,7 +11,7 @@ use regex::Regex;
 use reqwest::IntoUrl;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use tempfile::{tempdir, TempDir};
+use tempfile::{tempdir, tempfile, TempDir};
 
 use crate::{
     actions::{download_and_unpack, Unpack7Zip},
@@ -39,6 +40,20 @@ impl Modpack {
         }
 
         SafeTransaction::new(&tr, tempdir()?)?.run(&mo_dir.join("mods"))?;
+        Ok(())
+    }
+
+    pub fn enable(&self, mo_dir: &Path) -> Result<()> {
+        let tmpdir = tempdir()?;
+        let profile = tmpdir.path().join("profiles/Default");
+        std::fs::create_dir_all(&profile)?;
+        let mut tmp = std::fs::File::create(profile.join("modlist.txt"))?;
+        let mut out = Cursor::new(self.order.to_modorg_modlist(&self.addons));
+        std::io::copy(&mut out, &mut tmp)?;
+
+        let tr = BasicTransaction::new(tmpdir)?;
+        SafeTransaction::new(&tr, tempdir()?)?.run(mo_dir)?;
+
         Ok(())
     }
 }
@@ -186,7 +201,7 @@ impl Addons {
     }
 
     async fn install<'a>(entry: &'a FolderEntry, dl_dir: &Path) -> Result<BasicTransaction> {
-        let folders = walkdir::WalkDir::new(&dl_dir)
+        let folders = walkdir::WalkDir::new(dl_dir)
             .into_iter()
             .filter_map(|d| d.ok())
             .map(|d| d.into_path());
@@ -210,7 +225,7 @@ impl Addons {
 }
 
 #[skip_serializing_none]
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Hash)]
 pub struct FolderEntry {
     pub download: AddonKey,
     pub addon_folder: Option<String>,

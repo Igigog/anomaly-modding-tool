@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
+// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 mod actions;
 mod app;
 mod config;
@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
     let unpacker = download_7zip().await?;
     let mo_dir = Path::new("mo2");
     pack.install(mo_dir, &unpacker).await?;
+    pack.enable(mo_dir).unwrap();
 
     Ok(())
 }

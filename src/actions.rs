@@ -286,13 +286,16 @@ pub async fn download_file<W: std::io::Write>(
     progress_callback(&progress);
 
     let mut stream = response.bytes_stream();
-
+    let mut last_progress = 0;
     while let Some(item) = stream.next().await {
         let chunk = item?;
         file.write_all(&chunk)?;
 
         progress.downloaded += chunk.len() as u64;
-        progress_callback(&progress);
+        if progress.downloaded - last_progress > 1024 * 100 {     // a bit less pressure
+            progress_callback(&progress);
+            last_progress = progress.downloaded;
+        }
     }
 
     Ok(file)
