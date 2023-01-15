@@ -2,6 +2,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
+use crate::addonlist::FolderEntry;
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModpackConfig {
@@ -15,29 +17,15 @@ pub struct Metadata {
     name: String,
 }
 
-#[skip_serializing_none]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FolderEntry {
-    pub moddb: Option<ModdbLink>,
-    pub github: Option<GithubLink>,
-    pub url: Option<UrlLink>,
-    pub renamed_from: Option<String>,
-}
+#[cfg(test)]
+mod tests {
+    use crate::config::ModpackConfig;
 
-#[derive(Debug, Serialize, Deserialize, Hash)]
-pub struct ModdbLink {
-    pub url: String,
-    pub updated: String,
-}
+    static TEST_CONFIG: &str = include_str!("../resources/config.json");
 
-#[derive(Debug, Serialize, Deserialize, Hash)]
-pub struct GithubLink {
-    pub url: String,
-    pub tag: String,
-    pub filename: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Hash)]
-pub struct UrlLink {
-    url: String,
+    #[test]
+    fn serialization() {
+        let config: ModpackConfig = serde_json::from_str(TEST_CONFIG).unwrap();
+        assert_eq!(serde_json::to_string_pretty(&config).unwrap(), TEST_CONFIG.replace("\r\n", "\n"));
+    }
 }

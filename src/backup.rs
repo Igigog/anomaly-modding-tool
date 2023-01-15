@@ -52,14 +52,6 @@ impl<'a, 'b> FileTransaction {
             }
         }
 
-        if !path.exists() {
-            std::fs::create_dir_all(path)?;
-        }
-
-        let tmp_path = path.join("test_writable.txt");
-        std::fs::File::create(&tmp_path).or_else(|_| bail!("Directory is not writable"))?;
-        std::fs::remove_file(&tmp_path).or_else(|_| bail!("Directory is not writable"))?;
-
         Ok(())
     }
 
@@ -68,7 +60,11 @@ impl<'a, 'b> FileTransaction {
         root_dir: &'b Path,
         backup_dir: &'b Path,
     ) -> Result<SafeTransaction<'a, 'b>> {
-        Self::check_backup_dir(backup_dir)?;
+        if !backup_dir.exists() {
+            std::fs::create_dir_all(backup_dir)?;
+        } else {
+            Self::check_backup_dir(backup_dir)?;
+        }
 
         for path in self.relative_file_paths() {
             let root_path = root_dir.join(&path);
@@ -91,7 +87,7 @@ impl<'a, 'b> FileTransaction {
         })
     }
 
-    fn run(&self, root_dir: &Path) -> Result<()> {
+    pub fn run(&self, root_dir: &Path) -> Result<()> {
         let mut opt = fs_extra::dir::CopyOptions::new();
         opt.overwrite = true;
         opt.content_only = true;

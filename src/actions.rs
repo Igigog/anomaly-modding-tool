@@ -1,17 +1,10 @@
 use anyhow::{anyhow, bail, Result};
-use fs_extra::dir::CopyOptions;
 use futures_util::stream::StreamExt;
 use once_cell::sync::Lazy;
 
 use regex::Regex;
 use reqwest::IntoUrl;
-use std::{
-    ffi::OsString,
-    fmt::format,
-    fs,
-    os::windows::process::CommandExt,
-    path::{Path, PathBuf},
-};
+use std::{ffi::OsString, fs, os::windows::process::CommandExt, path::Path};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 use tokio::runtime::Runtime;
 
@@ -35,10 +28,12 @@ static URL_7ZIP: &str = "https://www.7-zip.org/a/7zr.exe";
 static URL_MODORG: &str = "https://github.com/ModOrganizer2/modorganizer/releases";
 static URL_MODDED_EXES: &str = "https://github.com/themrdemonized/STALKER-Anomaly-modded-exes";
 
-const URL_MODDB: &str = "https://www.moddb.com/mods/stalker-anomaly/addons/";
-
 pub struct Unpacker7Zip<P: AsRef<Path>> {
     path: P,
+}
+
+pub trait Unpack7Zip {
+    fn unpack(&self, file_path: &Path, out_dir: &Path) -> Result<()>;
 }
 
 impl<P: AsRef<Path>> Unpacker7Zip<P> {
@@ -57,8 +52,10 @@ impl<P: AsRef<Path>> Unpacker7Zip<P> {
 
         Self { path }
     }
+}
 
-    pub fn unpack(&self, file_path: &Path, out_dir: &Path) -> Result<()> {
+impl<P: AsRef<Path>> Unpack7Zip for &Unpacker7Zip<P> {
+    fn unpack(&self, file_path: &Path, out_dir: &Path) -> Result<()> {
         debug_assert!(!out_dir.is_file(), "Output directory is a file");
         let cmd: OsString = "x".into();
         let out_arg = {
@@ -188,7 +185,7 @@ impl AppAction for InstallMo2 {
         progress.unpacking_done = Some(false);
         progress_callback(&progress);
 
-        let modorg_tmp = unpack_temporary(unpacker_7zip, mod_org, |_| {})?;
+        let modorg_tmp = unpack_temporary(&unpacker_7zip, mod_org, |_| {})?;
 
         progress.unpacking_done = Some(true);
         progress.configuring_done = Some(false);
@@ -197,8 +194,6 @@ impl AppAction for InstallMo2 {
         Self::configure_mo2(modorg_tmp.path(), &ctx.anomaly_dir)?;
 
         progress.configuring_done = Some(true);
-        progress.finished = true;
-        progress_callback(&progress);
 
         let tr = FileTransaction::new(modorg_tmp)?;
 
@@ -206,7 +201,12 @@ impl AppAction for InstallMo2 {
         let backup_dir = ctx.anomaly_dir.join("BACKUP");
         let safe_tr = tr.backup(&mo_dir, &backup_dir)?;
 
-        safe_tr.run()
+        let done = safe_tr.run();
+
+        progress.finished = true;
+        progress_callback(&progress);
+
+        done
     }
 }
 
@@ -230,27 +230,6 @@ impl InstallModdedExes {
         })
         .await
     }
-
-    fn get_relative_paths_of_files(dir_path: &Path) -> Vec<PathBuf> {
-        walkdir::WalkDir::new(dir_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .map(|e| e.into_path())
-            .filter(|p| p.is_file())
-            .map(|p| p.strip_prefix(dir_path).unwrap().to_owned())
-            .collect()
-    }
-
-    fn backup_files(backup_dir: &Path, files: impl Iterator<Item = PathBuf>) {
-        for path in files {
-            println!("Backing up: {:#?}", path.as_os_str());
-            let backup_path = backup_dir.join(&path);
-            if path.is_file() {
-                std::fs::create_dir_all(backup_path.parent().unwrap()).unwrap();
-                std::fs::copy(path, backup_path).unwrap();
-            }
-        }
-    }
 }
 
 impl AppAction for InstallModdedExes {
@@ -259,27 +238,25 @@ impl AppAction for InstallModdedExes {
     type Config = ();
     fn run(
         _config: Self::Config,
-        _ctx: impl AsRef<AppContext>,
+        ctx: impl AsRef<AppContext>,
         _progress: impl FnMut(&Self::Progress),
     ) -> Result<Self::Output> {
         let file = Runtime::new()?.block_on(Self::download_modded_exes())?;
         let tmp_dir = tempfile::tempdir()?;
         unpack_zip(file.as_file(), tmp_dir.path(), |_| {})?;
-        let to_backup = Self::get_relative_paths_of_files(tmp_dir.path());
-        Self::backup_files(
-            std::path::Path::new("BACKUP_Vanilla_exes"),
-            to_backup.into_iter(),
-        );
-
-        let mut opt = CopyOptions::new();
-        opt.content_only = true;
-        opt.overwrite = true;
-        opt.copy_inside = true;
-
-        fs_extra::dir::copy(&tmp_dir, std::env::current_dir()?, &opt).unwrap();
-        println!("Done!");
+        let tr = FileTransaction::new(tmp_dir)?;
+        let backup_dir = ctx.as_ref().anomaly_dir.join("BACKUP_Vanilla_exes");
+        let safe = tr.backup(&ctx.as_ref().anomaly_dir, &backup_dir)?;
+        safe.run()?;
         Ok(())
     }
+}
+
+pub async fn download_and_unpack(url: impl IntoUrl, unpacker: &impl Unpack7Zip) -> Result<TempDir> {
+    let file = download_file(url, tempfile::NamedTempFile::new()?, |p| {
+        println!("Downloading {:#?}: {}/{:#?}", p.file_name, p.downloaded, p.size);
+    }).await?;
+    unpack_temporary(unpacker, file, |_| {})
 }
 
 pub async fn download_file<W: std::io::Write>(
@@ -329,8 +306,8 @@ pub struct UnpackZipProgress {
     unpacked: Vec<String>,
 }
 
-pub fn unpack_temporary<P: AsRef<Path>>(
-    unpacker_7zip: &Unpacker7Zip<P>,
+pub fn unpack_temporary(
+    unpacker_7zip: &impl Unpack7Zip,
     file: NamedTempFile,
     progress_callback: impl FnMut(&UnpackZipProgress),
 ) -> Result<TempDir> {
@@ -386,31 +363,4 @@ where
         progress_callback(&progress);
     }
     Ok(())
-}
-
-pub async fn scrape_moddb_url(addon: &str) -> Result<impl IntoUrl> {
-    let url = format!("{url}{addon}", url = URL_MODDB);
-    let resp = CLIENT.get(url).send().await?.text().await?;
-
-    let link = LINKS_REGEX
-        .captures_iter(&resp)
-        .map(|s| s.get(1).unwrap())
-        .find(|s| s.as_str().contains("addons/start"))
-        .map(|m| m.as_str().to_owned())
-        .ok_or_else(|| anyhow!("Couldn't find moddb download button"))?;
-
-    let resp = CLIENT
-        .get(format!("https://www.moddb.com{}", link))
-        .send()
-        .await?
-        .text()
-        .await?;
-    let link = LINKS_REGEX
-        .captures_iter(&resp)
-        .map(|s| s.get(1).unwrap())
-        .find(|s| s.as_str().contains("moddb.com/downloads/mirror"))
-        .map(|m| m.as_str().to_owned())
-        .ok_or_else(|| anyhow!("Couldn't find moddb mirror link"))?;
-    dbg!(&link);
-    Ok(link)
 }

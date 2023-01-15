@@ -1,0 +1,56 @@
+{
+  "metadata": {
+    "config_version": 1,
+    "name": "Igi's Pack"
+  },
+  "mods": {
+    "Anomaly-Mod-Configuration-Menu": {
+      "download": {
+        "type": "moddb",
+        "addon_link": "anomaly-mod-configuration-menu",
+        "updated": "Aug 8th, 2022"
+      },
+      "addon_folder": "Anomaly-Mod-Configuration-Menu"
+    },
+    "anomaly-speed": {
+      "download": {
+        "type": "github",
+        "repo": "ahuyn/anomaly-speed",
+        "tag": "latest",
+        "filename": "anomaly-speed.2022.10.30.zip"
+      }
+    },
+    "Weird_Tasks_Framework": {
+      "download": {
+        "type": "moddb",
+        "addon_link": "weird-tasks-framework",
+        "updated": "Jun 8th, 2022"
+      },
+      "addon_folder": "Weird_Tasks_Framework"
+    },
+    "BaseGame_Task_Pack": {
+      "download": {
+        "type": "moddb",
+        "addon_link": "weird-tasks-framework",
+        "updated": "Jun 8th, 2022"
+      },
+      "addon_folder": "BaseGame_Task_Pack"
+    },
+    "Arszi_Task_Pack": {
+      "download": {
+        "type": "moddb",
+        "addon_link": "weird-tasks-framework",
+        "updated": "Jun 8th, 2022"
+      },
+      "addon_folder": "Arszi_Task_Pack"
+    },
+    "GhenTuong_Task_Pack": {
+      "download": {
+        "type": "moddb",
+        "addon_link": "weird-tasks-framework",
+        "updated": "Jun 8th, 2022"
+      },
+      "addon_folder": "GhenTuong_Task_Pack"
+    }
+  }
+}
