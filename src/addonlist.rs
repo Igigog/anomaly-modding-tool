@@ -16,7 +16,7 @@ use tempfile::{tempdir, TempDir};
 
 use crate::{
     actions::{download_and_unpack, Unpack7Zip},
-    backup::FileTransaction,
+    backup::{BasicTransaction, ComplexTransaction},
     config::ModpackConfig,
 };
 
@@ -33,6 +33,7 @@ impl Modpack {
     pub async fn install(&self, mo_dir: &Path, unpacker: &impl Unpack7Zip) -> Result<()> {
         let modpack = tempdir()?;
         let mut cache = DownloadCache::new();
+        let mut tr = ComplexTransaction::new();
         for addon in self.addons.missing_addons(mo_dir) {
             let entry = self.addons.get(addon).unwrap();
             let dl_dir = cache.get_or_download(&entry.download, unpacker).await?;
@@ -42,7 +43,7 @@ impl Modpack {
             tr.run(&addon_dir)?;
         }
 
-        let tr = FileTransaction::new(modpack)?;
+        let tr = BasicTransaction::new(modpack)?;
         let backup = tempdir()?;
         tr.backup(&mo_dir.join("mods"), backup.path())?.run()?;
         Ok(())
@@ -195,7 +196,7 @@ impl Addons {
         entry: &'a FolderEntry,
         unpacker: &impl Unpack7Zip,
         dl_dir: &Path,
-    ) -> Result<FileTransaction> {
+    ) -> Result<BasicTransaction> {
         let folders = walkdir::WalkDir::new(&dl_dir)
             .into_iter()
             .filter_map(|d| d.ok())
@@ -214,7 +215,7 @@ impl Addons {
             .map(|p| (*p).to_owned())
             .ok_or_else(|| anyhow!("Can't find addon folder"))?;
 
-        let tr = FileTransaction::new(dir_name)?;
+        let tr = BasicTransaction::new(dir_name)?;
         Ok(tr)
     }
 }

@@ -1,21 +1,106 @@
 use anyhow::{bail, Context, Result};
 use std::{
+    collections::HashSet,
     io::ErrorKind,
     path::{Path, PathBuf},
+    vec::IntoIter,
 };
 
-pub struct FileTransaction {
+pub struct BasicTransaction {
     files: Box<dyn AsRef<Path>>,
+    parent_dir: Box<str>,
 }
 
 pub struct SafeTransaction<'a, 'b> {
-    transaction: &'a FileTransaction,
+    transaction: &'a BasicTransaction,
     backup_dir: &'b Path,
     root_dir: &'b Path,
 }
 
-impl<'a, 'b> FileTransaction {
+#[derive(Default)]
+pub struct ComplexTransaction {
+    parts: Vec<BasicTransaction>,
+}
+
+pub trait Transaction {
+    fn relative_file_paths(&self) -> HashSet<PathBuf>;
+    fn run(&self, root_dir: &Path) -> Result<()>;
+}
+
+impl Transaction for BasicTransaction {
+    fn run(&self, root_dir: &Path) -> Result<()> {
+        let mut opt = fs_extra::dir::CopyOptions::new();
+        opt.overwrite = true;
+        opt.content_only = true;
+        opt.copy_inside = true;
+        fs_extra::dir::copy(self.files.as_ref(), root_dir, &opt)?;
+
+        Ok(())
+    }
+
+    fn relative_file_paths(&self) -> HashSet<PathBuf> {
+        walkdir::WalkDir::new(self.files.as_ref())
+            .into_iter()
+            .map(|r| r.expect("Checked for errors in :new()"))
+            .filter(|e| e.path().is_file())
+            .map(|p| p.into_path())
+            .map(|p| p.strip_prefix(self.files.as_ref()).unwrap().to_owned())
+            .collect()
+    }
+}
+
+impl ComplexTransaction {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn and(&mut self, tr: BasicTransaction) -> &mut Self {
+        self.parts.push(tr);
+        self
+    }
+}
+
+impl Transaction for ComplexTransaction {
+    fn relative_file_paths(&self) -> HashSet<PathBuf> {
+        self.parts
+            .iter()
+            .flat_map(|tr| tr.relative_file_paths())
+            .collect()
+    }
+
+    fn run(&self, root_dir: &Path) -> Result<()> {
+        for tr in &self.parts {
+            tr.run(root_dir)?;
+        }
+        Ok(())
+    }
+}
+
+impl IntoIterator for ComplexTransaction {
+    type IntoIter = IntoIter<BasicTransaction>;
+    type Item = BasicTransaction;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.parts.into_iter()
+    }
+}
+
+impl FromIterator<BasicTransaction> for ComplexTransaction {
+    fn from_iter<T: IntoIterator<Item = BasicTransaction>>(iter: T) -> Self {
+        let mut s = Self::default();
+        for tr in iter {
+            s.and(tr);
+        }
+        s
+    }
+}
+
+impl BasicTransaction {
     pub fn new(path: impl AsRef<Path> + 'static) -> Result<Self> {
+        Self::inside_dir(path, String::new())
+    }
+
+    pub fn inside_dir(path: impl AsRef<Path> + 'static, parent: String) -> Result<Self> {
         let p = path.as_ref();
         if !p.is_dir() {
             bail!("Path is not a directory")
@@ -27,6 +112,7 @@ impl<'a, 'b> FileTransaction {
 
         Ok(Self {
             files: Box::new(path),
+            parent_dir: parent.into_boxed_str(),
         })
     }
 
@@ -37,6 +123,7 @@ impl<'a, 'b> FileTransaction {
             .filter(|e| e.path().is_file())
             .map(|p| p.into_path())
             .map(|p| p.strip_prefix(self.files.as_ref()).unwrap().to_owned())
+            .map(|p| Path::new(self.parent_dir.as_ref()).join(p))
             .collect()
     }
 
@@ -55,7 +142,7 @@ impl<'a, 'b> FileTransaction {
         Ok(())
     }
 
-    pub fn backup(
+    pub fn backup<'a, 'b>(
         &'a self,
         root_dir: &'b Path,
         backup_dir: &'b Path,
@@ -144,7 +231,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::backup::FileTransaction;
+    use crate::backup::BasicTransaction;
 
     #[test]
     fn relative_paths() {
@@ -158,7 +245,7 @@ mod tests {
         std::fs::File::create(tmpdir.path().join("dir2/config.rs")).unwrap();
         std::fs::File::create(tmpdir.path().join("dir2/dir2/config.rs")).unwrap();
 
-        let tr = FileTransaction::new(tmpdir).unwrap();
+        let tr = BasicTransaction::new(tmpdir).unwrap();
 
         let paths = tr.relative_file_paths();
         let expected = [
@@ -167,6 +254,35 @@ mod tests {
             "dir/config.rs",
             "dir2/config.rs",
             "dir2/dir2/config.rs",
+        ];
+        assert_eq!(paths.len(), expected.len());
+
+        for x in expected {
+            let p = std::path::Path::new(x);
+            assert!(paths.iter().any(|e| e == p))
+        }
+    }
+    #[test]
+    fn relative_paths_prefix() {
+        let tmpdir = tempdir().unwrap();
+        std::fs::create_dir(tmpdir.path().join("dir")).unwrap();
+        std::fs::create_dir_all(tmpdir.path().join("dir2/dir2")).unwrap();
+
+        std::fs::File::create(tmpdir.path().join("config.rs")).unwrap();
+        std::fs::File::create(tmpdir.path().join("uwu.rs")).unwrap();
+        std::fs::File::create(tmpdir.path().join("dir/config.rs")).unwrap();
+        std::fs::File::create(tmpdir.path().join("dir2/config.rs")).unwrap();
+        std::fs::File::create(tmpdir.path().join("dir2/dir2/config.rs")).unwrap();
+
+        let tr = BasicTransaction::inside_dir(tmpdir, "mo2".to_string()).unwrap();
+
+        let paths = tr.relative_file_paths();
+        let expected = [
+            "mo2/config.rs",
+            "mo2/uwu.rs",
+            "mo2/dir/config.rs",
+            "mo2/dir2/config.rs",
+            "mo2/dir2/dir2/config.rs",
         ];
         assert_eq!(paths.len(), expected.len());
 
@@ -186,7 +302,7 @@ mod tests {
         std::fs::File::create(tmpdir.path().join("resources/nxmhandler.ini")).unwrap();
 
         let cwd = std::env::current_dir().unwrap();
-        let tr = FileTransaction::new(tmpdir).unwrap();
+        let tr = BasicTransaction::new(tmpdir).unwrap();
 
         let backup = tr.backup(&cwd, backup_path).unwrap();
 

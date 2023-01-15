@@ -8,7 +8,7 @@ use std::{ffi::OsString, fs, os::windows::process::CommandExt, path::Path};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 use tokio::runtime::Runtime;
 
-use crate::{app::AppContext, backup::FileTransaction};
+use crate::{app::AppContext, backup::BasicTransaction};
 
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
@@ -195,7 +195,7 @@ impl AppAction for InstallMo2 {
 
         progress.configuring_done = Some(true);
 
-        let tr = FileTransaction::new(modorg_tmp)?;
+        let tr = BasicTransaction::new(modorg_tmp)?;
 
         let mo_dir = ctx.anomaly_dir.join("mo2");
         let backup_dir = ctx.anomaly_dir.join("BACKUP");
@@ -244,7 +244,7 @@ impl AppAction for InstallModdedExes {
         let file = Runtime::new()?.block_on(Self::download_modded_exes())?;
         let tmp_dir = tempfile::tempdir()?;
         unpack_zip(file.as_file(), tmp_dir.path(), |_| {})?;
-        let tr = FileTransaction::new(tmp_dir)?;
+        let tr = BasicTransaction::new(tmp_dir)?;
         let backup_dir = ctx.as_ref().anomaly_dir.join("BACKUP_Vanilla_exes");
         let safe = tr.backup(&ctx.as_ref().anomaly_dir, &backup_dir)?;
         safe.run()?;
@@ -254,8 +254,12 @@ impl AppAction for InstallModdedExes {
 
 pub async fn download_and_unpack(url: impl IntoUrl, unpacker: &impl Unpack7Zip) -> Result<TempDir> {
     let file = download_file(url, tempfile::NamedTempFile::new()?, |p| {
-        println!("Downloading {:#?}: {}/{:#?}", p.file_name, p.downloaded, p.size);
-    }).await?;
+        println!(
+            "Downloading {:#?}: {}/{:#?}",
+            p.file_name, p.downloaded, p.size
+        );
+    })
+    .await?;
     unpack_temporary(unpacker, file, |_| {})
 }
 
