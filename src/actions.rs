@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 
 use regex::Regex;
 use reqwest::IntoUrl;
-use std::{ffi::OsString, fs, os::windows::process::CommandExt, path::Path};
+use std::{ffi::OsString, fs, os::windows::process::CommandExt, path::Path, io::BufWriter};
 use tempfile::{NamedTempFile, TempDir, TempPath};
 use tokio::runtime::Runtime;
 
@@ -253,14 +253,16 @@ impl AppAction for InstallModdedExes {
 }
 
 pub async fn download_and_unpack(url: impl IntoUrl, unpacker: impl Unpack7Zip) -> Result<TempDir> {
-    let file = download_file(url, tempfile::NamedTempFile::new()?, |p| {
+    let tmpfile = tempfile::NamedTempFile::new()?;
+    let buf = BufWriter::new(tmpfile);
+    let file = download_file(url, buf, |p| {
         println!(
             "Downloading {}: {}/{}",
             p.file_name.as_ref().map(|s| s.to_owned()).unwrap_or_default(), p.downloaded, p.size.unwrap_or(0)
         );
     })
     .await?;
-    unpack_temporary(unpacker, file, |_| {})
+    unpack_temporary(unpacker, file.into_inner().unwrap(), |_| {})
 }
 
 pub async fn download_file<W: std::io::Write>(

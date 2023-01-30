@@ -11,7 +11,7 @@ use regex::Regex;
 use reqwest::IntoUrl;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use tempfile::{tempdir, tempfile, TempDir};
+use tempfile::{tempdir, TempDir};
 
 use crate::{
     actions::{download_and_unpack, Unpack7Zip},
@@ -35,7 +35,7 @@ impl Modpack {
         for addon in self.addons.missing_addons(mo_dir) {
             let entry = self.addons.get(addon).unwrap();
             let dl_dir = cache.get_or_download(&entry.download, unpacker).await?;
-            let addon_files = Addons::install(entry, &dl_dir).await?;
+            let addon_files = Addons::install(entry, &dl_dir)?;
             tr.add(InDir::new(addon_files, addon));
         }
 
@@ -48,13 +48,20 @@ impl Modpack {
         let profile = tmpdir.path().join("profiles/Default");
         std::fs::create_dir_all(&profile)?;
         let mut tmp = std::fs::File::create(profile.join("modlist.txt"))?;
-        let mut out = Cursor::new(self.order.to_modorg_modlist(&self.addons));
+        let mut out = Cursor::new(self.order.to_modorg_modlist());
         std::io::copy(&mut out, &mut tmp)?;
 
         let tr = BasicTransaction::new(tmpdir)?;
         SafeTransaction::new(&tr, tempdir()?)?.run(mo_dir)?;
 
         Ok(())
+    }
+
+    pub fn addons(&self) -> impl Iterator<Item = (&str, &FolderEntry)> {
+        self.order
+            .0
+            .iter()
+            .map(|s| (s.as_ref(), self.addons.0.get(s).unwrap()))
     }
 }
 
@@ -97,8 +104,8 @@ impl<'a> DownloadCache<'a> {
     }
 }
 
-#[derive(Default)]
-struct Addons(HashMap<String, FolderEntry>);
+#[derive(Default, Serialize, Deserialize)]
+pub struct Addons(HashMap<String, FolderEntry>);
 
 #[derive(Default)]
 struct LoadOrder(Vec<String>);
@@ -130,27 +137,25 @@ impl LoadOrder {
         Ok(())
     }
 
-    fn to_modorg_modlist(&self, all: &Addons) -> String {
-        let mut s = LOADORDER_HEADER.to_owned();
-        let enabled_mods = self.0.iter().map(|s| "+".to_owned() + s + "\n");
-        let disabled_mods = all
-            .0
-            .keys()
-            .filter(|k| !self.0.contains(k))
-            .map(|s| "-".to_owned() + s + "\n");
-        s.extend(enabled_mods);
-        s.extend(disabled_mods);
-        s
+    fn to_modorg_modlist(&self) -> String {
+        // ModOrg interprets the list in reversed order
+        let mut list = LOADORDER_HEADER.to_owned();
+        for addon in self.0.iter().rev() {
+            list.push('+');
+            list.push_str(addon);
+            list.push('\n');
+        }
+        list
     }
 }
 
 impl Addons {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    fn entry(&mut self, key: String) -> Entry<String, FolderEntry> {
-        self.0.entry(key)
+    pub fn insert(&mut self, key: String, val: FolderEntry) {
+        self.0.insert(key, val);
     }
 
     fn missing_addons(&self, mo_dir: &Path) -> Vec<&str> {
@@ -162,15 +167,11 @@ impl Addons {
             .collect()
     }
 
-    fn insert(&mut self, name: String, entry: FolderEntry) -> Option<FolderEntry> {
-        self.0.insert(name, entry)
-    }
-
     pub fn get(&self, folder: &str) -> Option<&FolderEntry> {
         self.0.get(folder)
     }
 
-    fn find_addons<'a>(folders: impl Iterator<Item = impl AsRef<Path>>) -> HashSet<PathBuf> {
+    fn find_addons(folders: impl Iterator<Item = impl AsRef<Path>>) -> HashSet<PathBuf> {
         folders
             .filter(|d| d.as_ref().file_name().unwrap() == "gamedata")
             .map(|d| d.as_ref().parent().unwrap().to_path_buf())
@@ -200,7 +201,7 @@ impl Addons {
             .collect()
     }
 
-    async fn install<'a>(entry: &'a FolderEntry, dl_dir: &Path) -> Result<BasicTransaction> {
+    fn install(entry: &FolderEntry, dl_dir: &Path) -> Result<BasicTransaction> {
         let folders = walkdir::WalkDir::new(dl_dir)
             .into_iter()
             .filter_map(|d| d.ok())
@@ -222,6 +223,16 @@ impl Addons {
         let tr = BasicTransaction::new(dir_name)?;
         Ok(tr)
     }
+
+    pub fn iter(&self) -> std::collections::hash_map::Iter<String, FolderEntry> {
+        self.0.iter()
+    }
+
+    pub fn has(&self, entry: &FolderEntry) -> bool {
+        self.0
+            .values()
+            .any(|e| e.download == entry.download)
+    }
 }
 
 #[skip_serializing_none]
@@ -232,7 +243,7 @@ pub struct FolderEntry {
 }
 
 impl FolderEntry {
-    fn new(key: AddonKey, folder: Option<String>) -> Self {
+    pub fn new(key: AddonKey, folder: Option<String>) -> Self {
         Self {
             download: key,
             addon_folder: folder,
@@ -259,7 +270,11 @@ pub struct UrlLink {
 }
 
 impl UrlLink {
-    fn get_download_url(&self) -> String {
+    pub fn new(url: String) -> Self {
+        Self { url }
+    }
+
+    pub fn get_download_url(&self) -> String {
         self.url.clone()
     }
 }
@@ -527,22 +542,15 @@ mod tests {
 
         let prefix = [
             "# This file was automatically generated by Anomaly Modding Tool. Sorry if it broke lol.\n",
-            "+community-task-pack\n",
-            "+BaseGame_Task_Pack\n",
-            "+GhenTuong_Task_Pack\n",
-            "+Arszi_Task_Pack\n",
-            "+Weird_Tasks_Framework\n",
             "+Anomaly-Mod-Configuration-Menu\n",
+            "+Weird_Tasks_Framework\n",
+            "+Arszi_Task_Pack\n",
+            "+GhenTuong_Task_Pack\n",
+            "+BaseGame_Task_Pack\n",
+            "+community-task-pack\n",
         ].join("");
 
-        let repr = modlist.to_modorg_modlist(&addons);
-
-        assert!(repr.starts_with(&prefix));
-        assert!(repr.lines().count() == addons.0.len() + 1);
-        for k in addons.0.keys().filter(|k| !modlist.0.contains(k)) {
-            assert!(repr.contains(&("-".to_owned() + k)));
-            assert!(!repr.contains(&("+".to_owned() + k)))
-        }
+        assert!(modlist.to_modorg_modlist() == prefix);
     }
 
     #[test]
